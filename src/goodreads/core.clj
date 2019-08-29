@@ -48,14 +48,13 @@
                    :parse-fn #(Integer/parseInt %)]
                   ["-h" "--help"]])
 
-(defn book->str [{:keys [title link authors average_rating]}]
-  (format "\"%s\" by %s\nMore: %s\nAverage rating: %s"
+(defn book->str [{:keys [title link authors]}]
+  (format "\"%s\" by %s\nMore: %s"
           title
           (->> authors
                (map :name)
                (clojure.string/join ", "))
-          link
-          average_rating))
+          link))
 
 (defn -main [& args]
   (let [{:keys [options errors summary]} (cli/parse-opts args cli-options)]
