@@ -109,5 +109,3 @@
             :link (:link book)
             :edition_count (:edition_count book)
             :subject_vector (map (partial get subj-vector) sorted-subjects)))
-
-
