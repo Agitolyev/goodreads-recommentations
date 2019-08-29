@@ -4,7 +4,9 @@
             [clojure.data.xml :as xml]
             [clojure.data.json :as json]))
 
-(defrecord Book [title edition_count subject key])
+(defrecord Book [title edition_count subject link])
+
+(defn openlib-key->link [key] (str "http://openlibrary.org" key))
 
 (defn xml->json [element]
   (cond
@@ -70,7 +72,7 @@
     (get book-info "title")
     (get book-info "edition_count" 0)
     (map (fn [subj] (get subj "name")) (get book-info "subjects" []))
-    (get book-info "key")))
+    (openlib-key->link (get book-info "key"))))
 
 (defn retrieve-book-subjects [book-isbn]
   "Retrieves book subjects by given book ISBN. Info source - openlibrary"
@@ -92,7 +94,7 @@
         (get raw-book "title")
         (get raw-book "edition_count")
         (get raw-book "subject")
-        (get raw-book "key")))
+        (openlib-key->link (get raw-book "key"))))
     (get (json/read-str (http-get->str (str (:url subject) ".json?details=true"))) "works")))
 
 (defn book->features [target-subjects, book]
@@ -104,7 +106,7 @@
 
   (def sorted-subjects (sort (map :name target-subjects)))
   (hash-map :title (:title book)
-            :key (:key book)
+            :link (:link book)
             :edition_count (:edition_count book)
             :subject_vector (map (partial get subj-vector) sorted-subjects)))
 
