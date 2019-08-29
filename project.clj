@@ -8,7 +8,8 @@
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [aleph "0.4.4"]
                  [org.clojure/tools.cli "0.3.5"]
-                 [org.clojure/data.xml "0.0.8"]]
+                 [org.clojure/data.xml "0.0.8"]
+                 [org.clojure/data.json "0.2.6"]]
   :main ^:skip-aot goodreads.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all}}

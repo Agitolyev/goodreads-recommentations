@@ -5,27 +5,36 @@
             [goodreads.gr-api :as ga]
             [clojure.edn :as edn]))
 
-(defn build-recommendations-part1 [config]
-  (def read-books (ga/retrieve-read-books-ids (config :token)))
-  (def reading-books (vector (ga/retrieve-curr-reading-books-ids (config :token))))
-  (def similar-books (ga/select-similar-books read-books (config :token)))
+(defn flip [f]
+  "Flips arguments"
+  (fn [& rev-args]
+    (apply f (reverse rev-args))))
 
+(defn pow [x n]
+  (Math/pow x n))
+
+(def sqr (partial (flip pow) 2))
+
+(defn eucl-norm [v1 v2]
+  (Math/sqrt (reduce + (map sqr (map (partial reduce -) (map vector v1 v2))))))
+
+(defn build-recommendations-part1 [config]
   (d/success-deferred
-    (take-last 10 (sort-by (fn [book-info] (edn/read-string (:average_rating book-info)))
-                           (filter
-                             (fn [book-info] (not (contains? reading-books (:id book-info))))
-                             similar-books)))))
+    (take (:number-books config) (sort-by (fn [book-info] (- (edn/read-string (:average_rating book-info))))
+                                          (filter
+                                            (fn [book-info]
+                                              (not (contains? (vector (ga/retrieve-curr-reading-books-ids (:token config))) (:id book-info))))
+                                            (ga/retrieve-similar-books (ga/retrieve-read-books-ids (:token config)) (:token config)))))))
 
 (defn build-recommentations [config]
-  (def read-books (ga/retrieve-read-books-ids (config :token)))
-  (def reading-books (vector (ga/retrieve-curr-reading-books-ids (config :token))))
-  (def similar-books (ga/select-similar-books read-books (config :token)))
-
   (d/success-deferred
-    (take-last 10 (sort-by (fn [book-info] (edn/read-string (:average_rating book-info)))
-                           (filter
-                             (fn [book-info] (not (contains? reading-books (:id book-info))))
-                             similar-books)))))
+    (let [target-subjects (ga/retrieve-target-subjects (ga/retrieve-read-books-ids (:token config)) (:token config))]
+      (def book->target-features (partial ga/book->features target-subjects))
+      (let [target-vector (map :weight (sort-by (fn [subj] (:name subj)) target-subjects))]
+        (take (:number-books config) (sort-by
+                                       (fn [book] (- (eucl-norm (:subject_vector book) target-vector)))
+                                       (map book->target-features
+                                            (distinct (mapcat ga/retrieve-books-by-subject target-subjects)))))))))
 
 (def cli-options [["-t"
                    "--timeout-ms"
@@ -50,11 +59,12 @@
 
 (defn -main [& args]
   (let [{:keys [options errors summary]} (cli/parse-opts args cli-options)]
+    (println options)
     (cond
       (contains? options :help) (do (println summary) (System/exit 0))
       (some? errors) (do (println errors) (System/exit 1))
       (empty? args) (do (println "Please, specify user's token") (System/exit 1))
-      :else (let [config {:token (first args)}
+      :else (let [config {:token (first args) :number-books (:number-books options)}
                   books (-> (build-recommentations config)
                             (d/timeout! (:timeout-ms options) ::timeout)
                             deref)]
