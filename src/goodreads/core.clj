@@ -32,7 +32,7 @@
       (def book->target-features (partial ga/book->features target-subjects))
       (let [target-vector (map :weight (sort-by (fn [subj] (:name subj)) target-subjects))]
         (take (:number-books config) (sort-by
-                                       (fn [book] (- (eucl-norm (:subject_vector book) target-vector)))
+                                       (fn [book] (eucl-norm (:subject_vector book) target-vector))
                                        (map book->target-features
                                             (distinct (mapcat ga/retrieve-books-by-subject target-subjects)))))))))
 
