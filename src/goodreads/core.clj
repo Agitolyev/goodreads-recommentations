@@ -1,40 +1,49 @@
 (ns goodreads.core
   (:gen-class)
-  (:require [clojure.tools.cli :as cli]
-            [manifold.deferred :as d]
+  (:require [clojure.edn :as edn]
+            [clojure.tools.cli :as cli]
             [goodreads.gr-api :as ga]
-            [clojure.edn :as edn]))
+            [manifold.deferred :as d]
+            [oauth.client :as oauth]))
 
-(defn flip [f]
-  "Flips arguments"
-  (fn [& rev-args]
-    (apply f (reverse rev-args))))
+(defn scalar-mul [v1 v2]
+  (reduce + (map (partial reduce *) (map vector v1 v2))))
 
-(defn pow [x n]
-  (Math/pow x n))
-
-(def sqr (partial (flip pow) 2))
-
-(defn eucl-norm [v1 v2]
-  (Math/sqrt (reduce + (map sqr (map (partial reduce -) (map vector v1 v2))))))
-
-(defn build-recommendations-part1 [config]
-  (d/success-deferred
-    (take (:number-books config) (sort-by (fn [book-info] (- (edn/read-string (:average_rating book-info))))
-                                          (filter
-                                            (fn [book-info]
-                                              (not (contains? (vector (ga/retrieve-curr-reading-books-ids (:token config))) (:id book-info))))
-                                            (ga/retrieve-similar-books (ga/retrieve-read-books-ids (:token config)) (:token config)))))))
+(defn get-credetials-provider [key, secret]
+  (let [consumer (oauth/make-consumer key
+                                      secret
+                                      "https://www.goodreads.com/oauth/request_token"
+                                      "https://www.goodreads.com/oauth/access_token"
+                                      "https://www.goodreads.com/oauth/authorize"
+                                      :hmac-sha1)
+        request-token (oauth/request-token consumer nil)]
+    (do
+      (let [url (oauth/user-approval-uri consumer
+                                         (:oauth_token request-token))]
+        (println (str "Please, visit this URL in your browser to authorize: " url)))
+      (println "Please, enter 'y' when authorization approved, or any key to exit.")
+      (let [input (read-line)]
+        (if (= "y" input)
+          (println "Ok, thanks.")
+          (System/exit 0)))
+      (let [access-token-response (oauth/access-token consumer
+                                                      request-token
+                                                      nil)]
+        (partial oauth/credentials consumer
+                 (:oauth_token access-token-response)
+                 (:oauth_token_secret access-token-response))))
+    )
+  )
 
 (defn build-recommentations [config]
   (d/success-deferred
-    (let [target-subjects (ga/retrieve-target-subjects (ga/retrieve-read-books-ids (:token config)) (:token config))]
-      (def book->target-features (partial ga/book->features target-subjects))
-      (let [target-vector (map :weight (sort-by (fn [subj] (:name subj)) target-subjects))]
-        (take (:number-books config) (sort-by
-                                       (fn [book] (eucl-norm (:subject_vector book) target-vector))
-                                       (map book->target-features
-                                            (distinct (mapcat ga/retrieve-books-by-subject target-subjects)))))))))
+    (let [credentials-provider (get-credetials-provider (:key config) (:secret config))]
+      (take (:number-books config)
+            (sort-by (fn [book-info] (- (edn/read-string (:average_rating book-info))))
+                     (filter
+                       (fn [book-info]
+                         (not (contains? (vector (ga/retrieve-curr-reading-books-ids credentials-provider)) (:id book-info))))
+                       (set (mapcat (partial ga/retrieve-similar-books credentials-provider) (ga/retrieve-read-books-ids credentials-provider)))))))))
 
 (def cli-options [["-t"
                    "--timeout-ms"
@@ -62,7 +71,7 @@
       (contains? options :help) (do (println summary) (System/exit 0))
       (some? errors) (do (println errors) (System/exit 1))
       (empty? args) (do (println "Please, specify user's token") (System/exit 1))
-      :else (let [config {:token (first args) :number-books (:number-books options)}
+      :else (let [config {:key (first args) :secret (second args) :number-books (:number-books options)}
                   books (-> (build-recommentations config)
                             (d/timeout! (:timeout-ms options) ::timeout)
                             deref)]

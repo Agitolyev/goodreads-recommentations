@@ -29,14 +29,14 @@ shelves, friends activity etc.
 Run using `lein`:
 
 ```shell
-    $ lein run <TOKEN> [<OPTIONS>]
+    $ lein run <KEY> <SECRET> [<OPTIONS>]
 ```
 
 Compile and run from JAR:
 
 ```shell
     $ lein uberjar
-    $ java -jar target/uberjar/goodreads-0.1.0-SNAPSHOT-standalone.jar <TOKEN> [<OPTIONS>]
+    $ java -jar target/uberjar/goodreads-0.1.0-SNAPSHOT-standalone.jar <KEY> <SECRET> [<OPTIONS>]
 ```
 
 ## License

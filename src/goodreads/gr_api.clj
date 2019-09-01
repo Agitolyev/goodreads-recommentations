@@ -19,8 +19,9 @@
     (map? element) {(:tag element) (xml->json (:content element))}
     :else nil))
 
-(defn http-get->str [url]
-  (-> @(http/get url)
+(defn http-get->str [url, params]
+  (-> @(http/get url
+                 {:query-params params})
       :body
       bs/to-string))
 
@@ -28,11 +29,14 @@
   (let [input-xml (java.io.StringReader. input)]
     (xml/parse input-xml)))
 
-(defn http-get-xml->json [url]
-  (let [response (http-get->str url)]
-    (xml->json (str->xml response))))
+(defn retrieve-user-id [credentials-provider]
+  (let [url "https://www.goodreads.com/api/auth_user"
+        credentials (credentials-provider :GET url)]
+    (let [user-info (first (filter (fn [el] (= (:tag el) :user))
+                                   (apply vector (:content (str->xml (http-get->str url credentials))))))]
+      (get-in user-info [:attrs :id]))))
 
-(defn retrieve-shelf-books-info [shelf dev-key target-key]
+(defn retrieve-shelf-books-info [shelf credentials-provider target-key]
   "Retrieves books in specified self and returns books info by specified key. Info source - goodreads"
   (defn extract-books-info [resp]
     (map (fn [el] (apply merge (:book el)))
@@ -41,19 +45,23 @@
                           (filter (fn [el] (contains? el :reviews))
                                   (:GoodreadsResponse resp)))))))
 
-  (let [read-list-url (str "https://www.goodreads.com/review/list/78268448.xml?&v=2&shelf=" shelf "&key=" dev-key)]
-    (filter (comp not nil?) (map target-key (extract-books-info (http-get-xml->json read-list-url))))))
+  (let [user-id (retrieve-user-id credentials-provider)
+        list-url (str "https://www.goodreads.com/review/list/" user-id ".xml")
+        params {:v 2 :shelf shelf}
+        credentials (credentials-provider :GET list-url params)]
+    (filter (comp not nil?)
+            (map target-key
+                 (extract-books-info (xml->json (str->xml (http-get->str list-url (merge params credentials)))))))))
 
-(defn retrieve-shelf-books-ids [shelf dev-key] (retrieve-shelf-books-info shelf dev-key :id))
-(defn retrieve-shelf-books-isbn [shelf dev-key] (retrieve-shelf-books-info shelf dev-key :isbn))
+(defn retrieve-shelf-books-ids [shelf credentials-provider] (retrieve-shelf-books-info shelf credentials-provider :id))
+(defn retrieve-shelf-books-isbn [shelf credentials-provider] (retrieve-shelf-books-info shelf credentials-provider :isbn))
 
 (def retrieve-read-books-ids (partial retrieve-shelf-books-ids "read"))
 (def retrieve-read-books-isbn (partial retrieve-shelf-books-isbn "read"))
 (def retrieve-curr-reading-books-ids (partial retrieve-shelf-books-ids "currently-reading"))
 
-(defn retrieve-similar-books [read-books-ids dev-key]
+(defn retrieve-similar-books [credentials-provider read-book-id]
   "Retrieves similar books by given read books. Info source - goodreads"
-  (defn book-info-url [id, dev-key] (str "https://www.goodreads.com/book/show/" id ".xml?key=" dev-key))
   (defn parse-books-info [response]
     (map (fn [book-info] (apply merge (:book book-info)))
          (:similar_books (first (filter
@@ -61,14 +69,20 @@
                                   (:book (first (filter
                                                   (fn [el] (contains? el :book))
                                                   (:GoodreadsResponse response)))))))))
-  (set (mapcat (fn [book-id] (parse-books-info (http-get-xml->json (book-info-url book-id dev-key)))) read-books-ids)))
+  (let [url (str "https://www.goodreads.com/book/show/" read-book-id ".xml")
+        credentials (credentials-provider :GET url)
+        params {:key (:oauth_consumer_key credentials)}]
+  (parse-books-info (xml->json (str->xml (http-get->str url (merge params credentials)))))))
 
-(defn retrieve-similar-books-isbn [read-books dev-key] (filter (comp not nil?) (map :isbn (retrieve-similar-books read-books dev-key))))
+(defn retrieve-similar-books-isbn [read-book-id credentials-provider]
+  (filter (comp not nil?)
+          (map :isbn (retrieve-similar-books credentials-provider read-book-id))))
 
 (defn retrieve-book-info-by-isbn [book-isbn]
   (let [isbn-key (str "ISBN:" book-isbn)
-        book-info-url (str "http://openlibrary.org/api/books?bibkeys=" isbn-key "&format=json&jscmd=data")]
-    (get (json/read-str (http-get->str book-info-url)) isbn-key)))
+        params {:bibkeys isbn-key :format "json" :jscmd "data"}
+        book-info-url (str "http://openlibrary.org/api/books")]
+    (get (json/read-str (http-get->str book-info-url params)) isbn-key)))
 
 (defn book-info->book [book-info]
   (Book.
@@ -91,9 +105,10 @@
       (map (fn [el] (assoc (first el) :weight (second el))) top-subjects))))
 
 (defn retrieve-books-by-subject [subject]
-  (map
-    book-info->book
-    (get (json/read-str (http-get->str (str (:url subject) ".json?details=true"))) "works")))
+  (let [params {:details "true"}]
+    (map
+      book-info->book
+      (get (json/read-str (http-get->str (str (:url subject) ".json") params)) "works"))))
 
 (defn book->features [target-subjects, book]
   (defn book-subj->feature-map [subj-set, target-subj]
