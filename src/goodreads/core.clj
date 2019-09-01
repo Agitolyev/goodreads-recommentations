@@ -31,9 +31,7 @@
                                                       nil)]
         (partial oauth/credentials consumer
                  (:oauth_token access-token-response)
-                 (:oauth_token_secret access-token-response))))
-    )
-  )
+                 (:oauth_token_secret access-token-response))))))
 
 (defn build-recommentations [config]
   (d/success-deferred

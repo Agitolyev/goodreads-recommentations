@@ -8,6 +8,10 @@
 
 (defn openlib-key->link [key] (str "http://openlibrary.org" key))
 
+(defn flip [f]
+  (fn [& args]
+    (apply f (reverse args))))
+
 (defn xml->json [element]
   (cond
     (nil? element) nil
@@ -63,7 +67,10 @@
 (defn retrieve-similar-books [credentials-provider read-book-id]
   "Retrieves similar books by given read books. Info source - goodreads"
   (defn parse-books-info [response]
-    (map (fn [book-info] (apply merge (:book book-info)))
+    (map (fn [book-info]
+           (let [book-descr (apply merge (:book book-info))
+                 authors (filter (partial (flip contains?) :name) (get-in book-descr [:authors :author]))]
+             (assoc-in book-descr [:authors]  authors)))
          (:similar_books (first (filter
                                   (fn [x] (contains? x :similar_books))
                                   (:book (first (filter
