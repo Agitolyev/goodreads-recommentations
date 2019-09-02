@@ -4,7 +4,7 @@
             [clojure.data.xml :as xml]
             [clojure.data.json :as json]))
 
-(defrecord Book [title edition_count subject link])
+(defrecord Book [title edition_count subject link authors])
 
 (defn openlib-key->link [key] (str "http://openlibrary.org" key))
 
@@ -23,11 +23,14 @@
     (map? element) {(:tag element) (xml->json (:content element))}
     :else nil))
 
-(defn http-get->str [url, params]
-  (-> @(http/get url
-                 {:query-params params})
-      :body
-      bs/to-string))
+(defn http-get->str
+  ([url] (-> @(http/get url)
+             :body
+             bs/to-string))
+  ([url params] (-> @(http/get url
+                               {:query-params params})
+                    :body
+                    bs/to-string)))
 
 (defn str->xml [input]
   (let [input-xml (java.io.StringReader. input)]
@@ -70,7 +73,7 @@
     (map (fn [book-info]
            (let [book-descr (apply merge (:book book-info))
                  authors (filter (partial (flip contains?) :name) (get-in book-descr [:authors :author]))]
-             (assoc-in book-descr [:authors]  authors)))
+             (assoc-in book-descr [:authors] authors)))
          (:similar_books (first (filter
                                   (fn [x] (contains? x :similar_books))
                                   (:book (first (filter
@@ -79,7 +82,7 @@
   (let [url (str "https://www.goodreads.com/book/show/" read-book-id ".xml")
         credentials (credentials-provider :GET url)
         params {:key (:oauth_consumer_key credentials)}]
-  (parse-books-info (xml->json (str->xml (http-get->str url (merge params credentials)))))))
+    (parse-books-info (xml->json (str->xml (http-get->str url (merge params credentials)))))))
 
 (defn retrieve-similar-books-isbn [read-book-id credentials-provider]
   (filter (comp not nil?)
@@ -91,48 +94,41 @@
         book-info-url (str "http://openlibrary.org/api/books")]
     (get (json/read-str (http-get->str book-info-url params)) isbn-key)))
 
+(defn retrieve-book-subjects [book-isbn]
+  "Retrieves book subjects by given book ISBN. Info source - openlibrary"
+  (let [raw-subjects (get (retrieve-book-info-by-isbn book-isbn) "subjects" [])]
+    (map (fn [subj] {:name (get subj "name") :url (get subj "url")}) raw-subjects)))
+
+(defn retrieve-num-of-works-by-subject [subject]
+  (let [url (str "https://openlibrary.org/subjects/" (.replace (.toLowerCase subject) " " "_") ".json")
+        subj-descr (try
+                     (json/read-str (http-get->str url))
+                     (catch Exception e (println (str "Can`t find subject info. Subject: " subject " Skipping..."))))]
+    (+ (get subj-descr "work_count" 0) (get subj-descr "ebook_count" 0))))
+
+(def get-num-of-books-by-mc-subj
+  "Retrieves LOW bound of book count estimation."
+  (let [most-common-subjects ["art", "fantasy", "biographies", "science", "recipes", "romance", "religion", "mystery and detective stories",
+                              "music", "medicine", "history", "children", "science fiction", "textbook"]]
+    (apply + (map retrieve-num-of-works-by-subject most-common-subjects))))
+
 (defn book-info->book [book-info]
+  "Extracts relevant info from book-info json to book structure."
   (Book.
     (get book-info "title")
     (get book-info "edition_count" 0)
-    (map (fn [subj] (get subj "name")) (get book-info "subjects" []))
-    (openlib-key->link (get book-info "key"))))
+    (get book-info "subject" [])
+    (openlib-key->link (get book-info "key"))
+    (let [authors (map (partial (flip get) "Unknown" "name") (get book-info "authors"))]
+      (map (fn [name] {:name name}) authors))))
 
-(defn retrieve-book-subjects [book-isbn]
-  "Retrieves book subjects by given book ISBN. Info source - openlibrary"
-  (let [raw-subjects (get (retrieve-book-info-by-isbn book-isbn) "subjects")]
-    (map (fn [subj] {:name (get subj "name") :url (get subj "url")}) raw-subjects)))
-
-(defn retrieve-target-subjects [books-read, dev-key]
-  "Retrieves books similar to that you`ve already read and finds subjects.
-   Returns top 25 (empirical value) most frequent subjects weighted by occ num. Info source - openlibrary
-   books-read - List of Goodreads books ids"
-  (let [subjects (mapcat retrieve-book-subjects (retrieve-similar-books-isbn books-read dev-key))]
-    (let [top-subjects (take 25 (sort-by (fn [el] (- (second el))) (apply vector (frequencies subjects))))]
-      (map (fn [el] (assoc (first el) :weight (second el))) top-subjects))))
-
-(defn retrieve-books-by-subject [subject]
-  (let [params {:details "true"}]
+(defn retrieve-books-by-subject [subject max-books]
+  (let [subj-descr (json/read-str (http-get->str (str (:url subject) ".json")))
+        works_count (+ (get subj-descr "work_count" 0) (get subj-descr "ebook_count" 0))
+        limit (if (> works_count max-books)
+                max-books
+                works_count)
+        params {:details "true" :limit limit}]
     (map
       book-info->book
       (get (json/read-str (http-get->str (str (:url subject) ".json") params)) "works"))))
-
-(defn book->features [target-subjects, book]
-  (defn book-subj->feature-map [subj-set, target-subj]
-    "Returns book feature map by book subjects set and given weighted target subjects."
-    (apply merge (map
-                   (fn [subject] (let [s-name (:name subject)]
-                                   (hash-map s-name (if (contains? subj-set s-name) (:weight subject) 0))))
-                   target-subj)))
-
-  (defn feature-map->ordered-vector [feature-map, ordered-features]
-    "Returns feature vectored ordered by ordered-features constructed from given feature-map"
-    (map (partial get feature-map) ordered-features))
-
-  (let [subj-set (set (:subject book))]
-    (let [feature-map (book-subj->feature-map subj-set target-subjects)
-          ordered-subjects (sort (map :name target-subjects))]
-      (hash-map :title (:title book)
-                :link (:link book)
-                :edition_count (:edition_count book)
-                :subject_vector (feature-map->ordered-vector feature-map ordered-subjects)))))
