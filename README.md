@@ -26,6 +26,9 @@ shelves, friends activity etc.
 
 ## Usage
 
+* KEY - refers to Goodreads API Key described in docs.
+* SECRET - refers to Goodreads API Secret described in docs.
+
 Run using `lein`:
 
 ```shell
